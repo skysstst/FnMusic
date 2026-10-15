@@ -67,7 +67,7 @@ class SettingsPage extends StatelessWidget {
           _NavigationTile(
             icon: Icons.lyrics_outlined,
             title: '歌词设置',
-            subtitle: '强制逐字卡拉OK、歌词配色',
+            subtitle: '歌词刮削、强制逐字卡拉OK、歌词配色',
             route: LyricsSettingsPage.route,
           ),
           _SectionHeader('缓存'),

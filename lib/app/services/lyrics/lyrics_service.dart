@@ -9,6 +9,7 @@ import '../../state/song_state.dart';
 import '../player_service.dart';
 import 'lyrics_parser.dart';
 import 'lyrics_repository.dart';
+import 'online_lyric_source.dart';
 
 enum LyricsLoadStatus { idle, loading, loaded, empty, failed }
 
@@ -184,6 +185,24 @@ class LyricsService {
       await refreshSettings();
       var lrc = await _repo.loadLrc(song);
       if (seq != _loadSeq) return;
+
+      if (lrc == null || lrc.trim().isEmpty) {
+        // 曲库里没有歌词 → 走在线多源兜底（顺序尝试、限流、失败记忆都在
+        // OnlineLyricSource 内部处理）。取到后写回**同一份本地缓存**，
+        // 所以第二次播放不再联网，也不会改变缓存路径与既有行为。
+        final online = await OnlineLyricSource.instance.fetchForSong(song);
+        if (seq != _loadSeq) return;
+        if (online != null && online.content.trim().isNotEmpty) {
+          await _repo.saveLrcToCache(song.guid, online.content);
+          lrc = online.content;
+          if (kDebugMode) {
+            debugPrint(
+              '[Lyrics] 在线补词: ${song.title} <- ${online.sourceId} '
+              '(${online.format.name})',
+            );
+          }
+        }
+      }
 
       if (lrc == null || lrc.trim().isEmpty) {
         snapshot.value = snapshot.value.copyWith(
