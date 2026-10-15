@@ -1,7 +1,20 @@
+import java.io.FileInputStream
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
+}
+
+// 正式签名配置。密码与密钥路径放在 android/key.properties（已被 .gitignore 忽略，
+// 千万不要提交）。该文件缺失时（例如他人 clone 本仓库）自动退回 debug 签名，
+// 保证任何人都还能直接把项目构建出来。
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+val hasReleaseKeystore = keystorePropertiesFile.exists()
+if (hasReleaseKeystore) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
 }
 
 android {
@@ -27,10 +40,26 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        if (hasReleaseKeystore) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = file(keystoreProperties["storeFile"] as String)
+                storePassword = keystoreProperties["storePassword"] as String
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: 配置正式签名（当前用 debug 签名便于调试构建）
-            signingConfig = signingConfigs.getByName("debug")
+            // 有 key.properties 时用正式签名；缺失则退回 debug 签名。
+            // 注意：签名一旦对外发布就不能再换，否则已安装的用户只能卸载重装。
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             // 与参考项目一致：关闭 R8/资源压缩（体积主要由原生库构成）
             isMinifyEnabled = false
             isShrinkResources = false
