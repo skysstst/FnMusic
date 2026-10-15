@@ -171,3 +171,49 @@ LIVE_NET=1 flutter test test/live_lyric_smoke_test.dart
 3. **LRCLIB 在国内网络很可能连不上**，中文覆盖也低。
 4. **同名歌曲可能配错版本。** 匹配是"歌名 + 歌手 + 时长"三级校验，跨歌手采纳时要求歌名完全一致且时长在容差内。宁可不匹配，也不给错的。
 5. **AMLL 首装要下 6 MB 索引**，已改成后台预下载、不挡界面，但第一两首歌大概率拿不到逐字。
+
+## 10. 同类项目参考
+
+本节交代**渠道选型与匹配策略的来源**。
+
+需要区分两件事：
+
+- 下面这些项目是**思路与接口形态层面**的参考，本项目实现均为独立重写，**未复制其代码**；
+- 本项目**唯一直接使用的第三方数据**是繁简对照表 —— 取自 OpenCC 的
+  `data/dictionary/TSCharacters.txt`（Apache-2.0），见 `sources/trad_simp_table.dart`，该文件已注明出处。
+
+### 10.1 渠道组合与降级顺序
+
+| 项目 | 参考点 |
+|---|---|
+| `zuo-qirun/Lyrics Companion` | 多源回退路线（LRCLIB / QQ / 网易云 / 酷狗 / 酷我）。本项目前五个渠道与其次序高度接近 |
+| `lyrix`（Rust 歌词库） | 统一搜索 + 本地匹配、**逐字优先、落空才回退整行** —— 本项目「两轮策略」的直接来源 |
+
+### 10.2 匹配与逐字格式
+
+| 项目 | 参考点 |
+|---|---|
+| `apoint123/Unilyric`（MIT） | 多源下载 + 全格式互转（含增强型 LRC）的覆盖面 |
+| `Robotxm/ESLyric-LyricsSource` | KRC / QRC / YRC → 增强型 LRC 的转换目标形态。「一律转成行内交错时间戳」这个设计取向来自这里 |
+| `tranxuanthang/lrcget`（MIT） | LRCLIB 官方客户端的接口用法：时长强校验、`User-Agent` 标识、`Retry-After` 处理 |
+
+### 10.3 同场景项目（fnOS 生态）
+
+| 项目 | 参考点 |
+|---|---|
+| `9313135/feiniu-car-music` | 同类 fnOS 客户端，已实现「磁盘缓存 + 在线取词 + 无歌词自动搜索兜底」。本功能的整体形态与其思路一致 |
+| 配套 `FnMusicEnhance` | 服务端注入式增强（nginx `/music-enhance/`），与本项目「只动客户端」的路线互为替代方案 |
+
+### 10.4 数据源本体（不是参考实现）
+
+| 项目 | 说明 |
+|---|---|
+| `amll-dev/amll-ttml-db` | AMLL TTML DB 本身。本项目直接读取其索引与 `.eslrc` 文件，属**使用数据源**，非参考实现 |
+
+### 10.5 其他调研过的项目
+
+以下项目在方案选型阶段一并看过，但**未影响本实现的最终设计**，仅列备忘：
+`AirLyrics/AirLyrics`、`WXRIW/Lyricify-App`、`Raduap/FN-Music-Apple`、
+`FNOSP/OpenFNMusicAndroid`、`xhongc/music-tag-web`、`spacex-3/tag_me`。
+
+> 若发现有遗漏的出处，欢迎指出，会补进本节。
