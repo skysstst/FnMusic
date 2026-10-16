@@ -89,8 +89,17 @@ class _AppStartupGateState extends State<AppStartupGate> {
   @override
   void initState() {
     super.initState();
-    // 恢复已保存账号会话。
-    AuthService.instance.initialize();
+    // 恢复已保存账号会话（带 20s 兜底，绝不停在闪屏）。
+    AuthService.instance.ensureInitializeCompletes();
+  }
+
+  @override
+  void dispose() {
+    // 启动门没了，兜底定时器也就没有存在意义 ——
+    // 留着会在门被销毁后仍去改 `status`，属于误伤。
+    // （正常流程里门与 App 同生命周期，走到这里多半是测试或热重载。）
+    AuthService.instance.cancelInitializeWatchdog();
+    super.dispose();
   }
 
   @override

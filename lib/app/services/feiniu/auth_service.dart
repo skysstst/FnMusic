@@ -28,6 +28,11 @@ class AuthService {
 
   bool _initialized = false;
 
+  /// 启动兜底定时器（见 [ensureInitializeCompletes]）。`initialize()` 一返回
+  /// 就被拆掉 —— 挂着的 Timer 既会误改 `_initialized`，也会在 widget 测试里
+  /// 造成「用例结束时还有待触发定时器」的失败。
+  Timer? _watchdog;
+
   String? _deviceId;
   String? _cachedDeviceId;
 
@@ -61,13 +66,23 @@ class AuthService {
       ApiClient.instance.setToken(account.token);
       // 补齐连接上下文：重启后首页请求需带上安全码 / 中继 / 连接信息，
       // 否则带安全码或中继的账号请求会被服务器拒绝而显示异常。
-      await AppFnConnectionSettings.restoreConnection(
-        url: account.serverUrl,
-        isRelay: account.relayMode,
-        fnId: account.fnId,
-        method: account.relayMode ? '中继链接' : null,
-      );
-      await AppFnConnectionSettings.setAccessCode(account.accessCode);
+      //
+      // **整段必须限时**：下面这些 await 里有网络调用，一旦它不返回
+      // （中继握手挂起、服务器半死不活），`initialize()` 永不返回，
+      // 而启动门正等着 `status != restoring` 才放行 —— 结果就是
+      // App 永远停在闪屏，界面上连登录页都看不到，用户只能强杀。
+      // 「等不到就当离线」在这里是对的：下面的请求本来就都有各自的兜底。
+      try {
+        await AppFnConnectionSettings.restoreConnection(
+          url: account.serverUrl,
+          isRelay: account.relayMode,
+          fnId: account.fnId,
+          method: account.relayMode ? '中继链接' : null,
+        ).timeout(const Duration(seconds: 8));
+        await AppFnConnectionSettings.setAccessCode(account.accessCode);
+      } catch (e) {
+        debugPrint('[Auth] 恢复连接上下文失败（按离线处理）: $e');
+      }
       final bool valid = await _validateSession();
       if (valid) {
         status.value = AuthStatus.loggedIn;
@@ -79,6 +94,47 @@ class AuthService {
       status.value = AuthStatus.loggedOut;
     }
     _initialized = true;
+  }
+
+  /// 启动门兜底：保证 [initialize] 无论内部发生什么，
+  /// 最终都会把 `status` 从 `restoring` 推进出去。
+  ///
+  /// 背景：启动门（`AppStartupGate`）是「`status != restoring` 才放行」的，
+  /// 所以只要 `initialize()` 因为任何一个 await 挂住没返回，
+  /// 用户看到的就是**永久闪屏** —— 连「网络似乎有问题」这类提示都没有，
+  /// 只能强杀重开。
+  ///
+  /// 这里用「超时即视为离线、保留会话」而不是「超时即登出」：
+  /// 断网时不该把用户踢回登录页（本该走本地缓存）。
+  void ensureInitializeCompletes() {
+    if (_initialized) return;
+    // 兜底定时器：**谁先到谁拆掉对方**。
+    // 正常情况下 initialize() 几秒就回来了，兜底根本不该触发 ——
+    // 让它白跑 20 秒既浪费，也会在 widget 测试里留下待触发的 Timer。
+    _watchdog?.cancel();
+    _watchdog = Timer(const Duration(seconds: 20), () {
+      _watchdog = null;
+      if (_initialized) return;
+      debugPrint('[Auth] initialize 超过 20s 未完成，按离线放行');
+      status.value = status.value == AuthStatus.restoring
+          ? AuthStatus.loggedIn
+          : status.value;
+      _initialized = true;
+    });
+    // 不 await：故意让 initialize 自己跑完，自己只是兜底。
+    unawaited(initialize());
+  }
+
+  /// 拆掉兜底定时器。由启动门在 `dispose` 时调用。
+  ///
+  /// 门已经不在了，定时器再去改 `status` 就成了误伤 —— 而且挂着的 Timer
+  /// 会让 widget 测试在用例结束时因「还有待触发定时器」而失败。
+  void cancelInitializeWatchdog() => _cancelWatchdog();
+
+  /// 拆掉兜底定时器（initialize 一返回就调）。
+  void _cancelWatchdog() {
+    _watchdog?.cancel();
+    _watchdog = null;
   }
 
   /// 轻量会话校验：打 `/track/list`（与连接探测的 authChecked 端点一致）。
