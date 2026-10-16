@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../app/services/lyrics/lyric_offset_store.dart';
 import '../../app/services/lyrics/lyrics_service.dart';
 import '../../app/services/lyrics/online_lyric_source.dart';
 import '../../app/services/lyrics/sources/lyric_source.dart';
@@ -18,6 +19,11 @@ class _LyricsSettingsPageState extends State<LyricsSettingsPage> {
   bool _forceKaraoke = false;
   bool _onlineEnabled = true;
 
+  /// 已调整过时间轴偏移的歌曲数。
+  int _offsetCount = 0;
+
+  final LyricsService lyrics = LyricsService.instance;
+
   /// 每个渠道最近一次连通性测试的结果。
   final Map<String, LyricProbeResult> _probes = <String, LyricProbeResult>{};
 
@@ -33,10 +39,12 @@ class _LyricsSettingsPageState extends State<LyricsSettingsPage> {
   Future<void> _load() async {
     await LyricsService.instance.refreshSettings();
     await OnlineLyricSource.instance.refreshSettings();
+    final int offsets = await lyrics.offsetCount();
     if (!mounted) return;
     setState(() {
       _forceKaraoke = LyricsService.instance.forceKaraoke;
       _onlineEnabled = OnlineLyricSource.instance.enabled;
+      _offsetCount = offsets;
     });
   }
 
@@ -183,6 +191,26 @@ class _LyricsSettingsPageState extends State<LyricsSettingsPage> {
               await OnlineLyricSource.instance.clearMissCache();
               messenger.showSnackBar(
                 const SnackBar(content: Text('已清除失败记录')),
+              );
+            },
+          ),
+          ListTile(
+            leading: const Icon(Icons.restore_page_outlined),
+            title: const Text('清除全部对齐调整'),
+            subtitle: Text(
+              _offsetCount == 0
+                  ? '还没有调整过任何歌词的时间轴'
+                  : '已调整 $_offsetCount 首，清除后它们回到歌词自带的偏移',
+            ),
+            enabled: _offsetCount > 0,
+            onTap: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              await LyricOffsetStore.instance.clear();
+              await lyrics.reloadCurrentSong();
+              if (!mounted) return;
+              setState(() => _offsetCount = 0);
+              messenger.showSnackBar(
+                const SnackBar(content: Text('已清除全部对齐调整')),
               );
             },
           ),

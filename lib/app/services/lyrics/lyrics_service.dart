@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_lyric/core/lyric_controller.dart';
 import 'package:flutter_lyric/core/lyric_model.dart' as fl;
@@ -7,6 +9,7 @@ import 'package:signals/signals.dart';
 import '../../state/player_state.dart';
 import '../../state/song_state.dart';
 import '../player_service.dart';
+import 'lyric_offset_store.dart';
 import 'lyric_origin.dart';
 import 'lyrics_parser.dart';
 import 'lyrics_repository.dart';
@@ -67,6 +70,23 @@ class LyricsService {
   final LyricsRepository _repo = LyricsRepository();
   final FnPlayerService _player = FnPlayerService.instance;
   final AppPlayerState _state = AppPlayerState.instance;
+
+  /// 当前这首歌的手动时间轴偏移（毫秒）。`null` = 没调过。
+  ///
+  /// 单独暴露成一个 notifier，是为了让调整面板在拖动过程中能实时显示数值，
+  /// 而不必把整份歌词模型重新解析一遍（那是几十毫秒级的操作，不该绑在每一帧上）。
+  final ValueNotifier<int?> currentOffset = ValueNotifier(null);
+
+  /// [currentOffset] 的 signals 镜像，供歌词页 `Watch.builder` 订阅。
+  ///
+  /// 歌词页整体走 signals（`Watch.builder` 一次订阅全部），而偏移沿用
+  /// ValueNotifier 是因为服务层内部逻辑读它更顺手。两者并存时**必须**在这里
+  /// 桥接一次，否则操作栏上「已调过偏移」的高亮不会随调整刷新。
+  late final currentOffsetSignal = signal<int?>(null);
+
+  /// 每首歌的偏移记录。存储与来源记录分开，理由见 [LyricOffsetStore]。
+  final LyricOffsetStore _offsets = LyricOffsetStore.instance;
+
   final LyricController controller = LyricController();
   final ValueNotifier<LyricsSnapshot> snapshot = ValueNotifier(
     LyricsSnapshot.idle(),
@@ -97,10 +117,20 @@ class LyricsService {
   int _loadSeq = 0;
   bool _viewForceKaraoke = false;
 
+  /// 当前这份歌词的 **LRC 原文**（未经解析）。
+  ///
+  /// 存在的唯一理由是 [reparseWithOffset]：调整偏移只需要拿原文重解析一次，
+  /// 不该为此重走一遍「清空 → loading → 联网/读缓存 → 恢复」的全流程
+  /// —— 那条路会让屏幕上的歌词每按一次键就消失一瞬。
+  String? _lastRawLrc;
+
   LyricsService._internal() {
     snapshot.addListener(() => snapshotSignal.value = snapshot.value);
     viewSettingsTick.addListener(
       () => viewSettingsTickSignal.value = viewSettingsTick.value,
+    );
+    currentOffset.addListener(
+      () => currentOffsetSignal.value = currentOffset.value,
     );
     controller.activeIndexNotifiter.addListener(
       () => activeIndexSignal.value = controller.activeIndexNotifiter.value,
@@ -174,8 +204,14 @@ class LyricsService {
     _updateCurrentLineText(controller.activeIndexNotifiter.value);
   }
 
-  void reloadCurrentSong() {
-    _loadForSong(_state.currentSong.value);
+  /// 重新解析当前歌词，但不重新联网、不清缓存。
+  ///
+  /// 返回 [Future] 而不是 `void` 是刻意的：调用方（调整偏移的面板）需要
+  /// `await` 它，才能保证「用户松手」到「歌词挪到位」之间的等待是可感知的、
+  /// 确定的。早期版本这里是 `void`，于是 `await` 一个 void 既拿不到结果也没有
+  /// 任何等待语义，静态分析直接报 `use_of_void_result`。
+  Future<void> reloadCurrentSong() {
+    return _loadForSong(_state.currentSong.value);
   }
 
   /// 重新匹配当前这首歌的歌词。
@@ -189,6 +225,55 @@ class LyricsService {
   /// 歌词库里只有原唱条目），判据是「歌名一致 + 时长贴合」，所以「配到别的版本」
   /// 是必然会发生的。而原来一旦配错，用户除了清空**全部**歌词缓存之外没有任何
   /// 办法 —— 连「这首歌配错了」都无从表达。
+  /// 只因为**偏移变了**而重新解析当前歌词。
+  ///
+  /// ## 为什么不能直接用 [reloadCurrentSong]
+  ///
+  /// `_loadForSong` 一进门就把 `status` 打成 `loading`、`model` 打成 `null`、
+  /// `controller.lyricNotifier` 也清掉 —— 这是「换歌/找词」时该有的样子。
+  /// 但用户**每按一次步进键**都会走这条路，于是屏幕上的歌词瞬间消失、
+  /// 操作栏文案变成「正在寻找歌词…」、然后再跳回来。实测表现为每次按键都闪一下，
+  /// 而调整偏移本来是个应该「手指按下去、歌词平滑挪动」的动作。
+  ///
+  /// 所以这里走一条捷径：词已经拿到了，来源、状态、网络全部无关，
+  /// 只用**缓存下来的那份 LRC 原文**（[_lastRawLrc]）重解析一次并直接换上去，
+  /// 不经过 loading、不清空、不给任何中间态。
+  ///
+  /// 拿不到原文时（比如刚冷启动还没加载过）退回 [reloadCurrentSong] ——
+  /// 那时闪一下是不可避免的，但那种场景本来也不是连续按键。
+  Future<void> reparseWithOffset(int? offsetMs) async {
+    final song = _state.currentSong.value;
+    if (song == null) return;
+    final String? raw = _lastRawLrc;
+    if (raw == null || raw.trim().isEmpty) {
+      await reloadCurrentSong();
+      return;
+    }
+    currentOffset.value = offsetMs;
+    try {
+      final model = LyricsParser.buildModelFromRaw(
+        raw,
+        songDuration: (song.durationMs == null)
+            ? null
+            : Duration(milliseconds: song.durationMs!),
+        predictDuration: false,
+        forceKaraoke: _viewForceKaraoke,
+        manualOffset: offsetMs == null
+            ? null
+            : Duration(milliseconds: offsetMs),
+      );
+      // 直接换模型。`loadLyricModel` 内部会按新时间戳重算当前行，
+      // 所以歌词是「挪过去」而不是「清空再出现」。
+      controller.loadLyricModel(model);
+      _updateCurrentLineText(controller.activeIndexNotifiter.value);
+      snapshot.value = snapshot.value.copyWith(model: model);
+    } catch (e) {
+      // 这条路失败不该让用户看到「歌词加载失败」—— 屏幕上的旧模型仍可用，
+      // 偏移记录也已经写进存储了。
+      if (kDebugMode) debugPrint('[Lyrics] 偏移重解析失败（保留原显示）: $e');
+    }
+  }
+
   Future<void> rematchCurrentSong() async {
     final song = _state.currentSong.value;
     if (song == null) return;
@@ -220,6 +305,10 @@ class LyricsService {
     controller.lyricNotifier.value = null;
     currentLineText.value = null;
     currentOrigin.value = null;
+    currentOffset.value = null;
+    // 换歌了：旧歌的原文对不上新歌，必须丢掉，
+    // 否则 [reparseWithOffset] 会拿上一首的词去重解析。
+    _lastRawLrc = null;
 
     if (song == null) {
       snapshot.value = snapshot.value.copyWith(
@@ -292,6 +381,7 @@ class LyricsService {
       currentOrigin.value = origin;
 
       if (lrc == null || lrc.trim().isEmpty) {
+        currentOffset.value = null;
         snapshot.value = snapshot.value.copyWith(
           status: LyricsLoadStatus.empty,
           song: song,
@@ -301,6 +391,15 @@ class LyricsService {
         return;
       }
 
+      // 手动偏移要在解析**之前**取，和歌词来自哪一层（音乐库/在线）无关 ——
+      // 音乐库自带的词同样可能整体早半拍，那与它是不是联网刮来的毫无关系。
+      final int? offsetMs = await _offsets.get(song.guid);
+      if (seq != _loadSeq) return;
+      currentOffset.value = offsetMs;
+
+      // 存住原文，供 [reparseWithOffset] 用（见该方法文档）。
+      _lastRawLrc = lrc;
+
       final model = LyricsParser.buildModelFromRaw(
         lrc,
         songDuration: (song.durationMs == null)
@@ -308,6 +407,9 @@ class LyricsService {
             : Duration(milliseconds: song.durationMs!),
         predictDuration: false,
         forceKaraoke: _viewForceKaraoke,
+        manualOffset: offsetMs == null
+            ? null
+            : Duration(milliseconds: offsetMs),
       );
       if (kDebugMode) {
         final translationCount = model.lines
@@ -392,4 +494,38 @@ class LyricsService {
     await _reloadViewColorPrefs();
     notifyViewSettingsChanged();
   }
+
+  // ---------------------------------------------------------------------
+  // 手动歌词偏移
+  // ---------------------------------------------------------------------
+
+  /// 设置当前这首歌的歌词时间轴偏移（毫秒），并**立即**重新解析当前歌词。
+  ///
+  /// 为什么必须立即生效：调偏移的本质是「一边听一边挪，看挪到哪行刚好对上」，
+  /// 如果每次微调都要等一次重新加载，这个操作就没法用了。所以这里刻意不走
+  /// [rematchCurrentSong] 的完整流程（那会清缓存、重新联网），而是拿现有缓存
+  /// 重新解析一遍 —— 和 [reloadCurrentSong] 是同一类「只重解析」的操作。
+  ///
+  /// 传 0 等于「显式归零」，会顺带删除记录（见 [LyricOffsetStore.put]）；
+  /// 用户确认过对齐之后归零，是有意义的操作，与「从没调过」要区分得开。
+  Future<void> setCurrentOffset(int ms) async {
+    final song = _state.currentSong.value;
+    if (song == null) return;
+    final int clamped = LyricOffsetStore.clampMs(ms);
+    await _offsets.put(song.guid, clamped);
+    // 刻意走 [reparseWithOffset] 而不是 [reloadCurrentSong]：后者会先清空
+    // 歌词进入 loading 态，用户每按一次步进键就会看到歌词消失一瞬（实测会闪）。
+    await reparseWithOffset(clamped == 0 ? null : clamped);
+  }
+
+  /// 撤销当前这首歌的偏移调整，回到文件自带的 `[offset:]` 对齐。
+  Future<void> clearCurrentOffset() async {
+    final song = _state.currentSong.value;
+    if (song == null) return;
+    await _offsets.remove(song.guid);
+    await reparseWithOffset(null);
+  }
+
+  /// 已调整过偏移的歌有多少首（歌词设置页展示）。
+  Future<int> offsetCount() => _offsets.count();
 }

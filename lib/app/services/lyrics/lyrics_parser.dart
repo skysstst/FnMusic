@@ -654,6 +654,18 @@ class LyricsParser {
     Duration? songDuration,
     bool predictDuration = true,
     bool forceKaraoke = false,
+
+    /// 用户手动调的时间轴偏移，**叠加在** LRC 自带的 `[offset:]` 之上。
+    ///
+    /// 两者的符号约定一致（正值 = 歌词延后），所以可以直接相加。
+    ///
+    /// 为什么允许叠加而不是「手动值覆盖文件值」：文件里的 `[offset:]` 是上游
+    /// 自己的对齐结果，我们没有理由判定它错；而用户的调整是在**看过实际效果
+    /// 之后**做的，只可能更贴近他要的东西。所以「上游说延 500，我听着还得再
+    /// 延 200」就应该是总共 700，而不是二选一。
+    ///
+    /// 留空（`null`）与 `Duration.zero` 等价，都表示不叠加。
+    Duration? manualOffset,
   }) {
     final modelLines = <fl.LyricLine>[];
     final rawLines = lrc
@@ -661,8 +673,8 @@ class LyricsParser {
         .where((e) => e.trim().isNotEmpty);
     final timeReg = RegExp(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]');
     final seenTimes = <int>{};
-    // 整首歌共用一个校正量，见 [_parseOffset]。
-    final offset = _parseOffset(lrc);
+    // 整首歌共用一个校正量 = 文件自带的 + 用户手动调的，见 [manualOffset]。
+    final offset = _parseOffset(lrc) + (manualOffset ?? Duration.zero);
 
     for (final raw in rawLines) {
       if (RegExp(r'^\s*\[(ti|ar|al|by|offset):').hasMatch(raw.toLowerCase())) {
@@ -785,10 +797,15 @@ class LyricsParser {
         final rawStepMs = totalMs ~/ count;
         final stepMs = rawStepMs.clamp(1500, 6000);
         for (int i = 0; i < count; i++) {
-          final start = Duration(milliseconds: stepMs * i);
-          var end = Duration(milliseconds: stepMs * (i + 1));
+          // 纯文本退化路径也要体现偏移：这条路径按歌曲长度均分时间轴，
+          // 用户既然调过偏移，就该整体平移而不是在无时间轴的字上被忽略。
+          final int shiftMs = offset.inMilliseconds;
+          final start = Duration(milliseconds: stepMs * i + shiftMs);
+          var end = Duration(milliseconds: stepMs * (i + 1) + shiftMs);
           if (songDuration != null && i == count - 1) {
-            end = songDuration;
+            // 末行原本锚在歌曲总时长上；加偏移后它会越界，所以同步平移，
+            // 让「最后一行盖到歌尾」这个关系在平移后依然成立。
+            end = Duration(milliseconds: songDuration.inMilliseconds + shiftMs);
           }
           if (end <= start) {
             end = start + const Duration(seconds: 3);

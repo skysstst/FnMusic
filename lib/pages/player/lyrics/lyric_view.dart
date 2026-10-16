@@ -13,9 +13,19 @@ import '../../../app/state/player_state.dart';
 import '../../../app/state/settings_state.dart';
 import '../../../components/common/setting_widgets.dart';
 import '../widgets/player_bottom_panel.dart';
+import 'widgets/lyric_offset_bar.dart';
 import 'widgets/lyric_origin_sheet.dart';
 import 'widgets/lyrics_actions_bar.dart';
 import 'widgets/lyrics_drag_to_seek.dart';
+
+/// [LyricController.setOnTapLineCallback] 的两种用途。
+enum _TapLineMode {
+  /// 点歌词 → 跳到该句播放（旧行为，独立歌词页等仍需要）。
+  seek,
+
+  /// 点歌词 → 交还给外层（播放页用它回到封面页）。
+  delegate,
+}
 
 /// 全屏歌词页（播放页内第二页）。
 class PlayerLyricsView extends StatefulWidget {
@@ -29,10 +39,18 @@ class PlayerLyricsView extends StatefulWidget {
   /// 让歌词淡出而非被直接裁掉。
   final bool fadeEdges;
 
+  /// 点歌词行时触发（而非跳转到该句播放）。
+  ///
+  /// 播放页用它把「点歌词」改成「回到封面页」—— 见 [_PlayerLyricsViewState]
+  /// 里对 [LyricController.setOnTapLineCallback] 的接管。留空则保持旧行为
+  /// （点歌词 seek 到该句），供独立歌词页等其它调用方使用。
+  final VoidCallback? onTapLine;
+
   const PlayerLyricsView({
     super.key,
     this.showControls = false,
     this.fadeEdges = false,
+    this.onTapLine,
   });
 
   @override
@@ -71,12 +89,58 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
   late final _selectionCentered = createSignal(false);
   VoidCallback? _unregisterResumeSelectedLine;
   VoidCallback? _unregisterStopSelection;
-  bool _tapSeekEnabled = true;
+
+  /// 「点歌词」当前处于哪种模式。`null` 表示还没注册过。
+  ///
+  /// 必须在**首次 build 之前**就确定并注册：`LyricController` 是全局单例，
+  /// 若等到 build 里再按条件补注册，上一页遗留的回调会先命中一次，
+  /// 表现为「刚进歌词页点一下却执行了旧行为」。
+  _TapLineMode? _tapMode;
+
+  _TapLineMode get _desiredTapMode =>
+      widget.onTapLine != null ? _TapLineMode.delegate : _TapLineMode.seek;
+
+  /// 时间轴微调浮层是否展开。由「时」按钮切换。
+  ///
+  /// 刻意用 [Signal] 而不是普通 bool + `setState`：切浮层时若走 `setState`，
+  /// 整个歌词页（含正在滚动的歌词列表）都会重建一遍 —— 实测表现为**歌词位置
+  /// 整体跳一下**，观感很差。而这个状态只被浮层自己和「时」按钮消费，
+  /// 用 signal 把重建范围精确限定在这两个小部件里。
+  final Signal<bool> _offsetBarVisible = signal(false);
+
+  /// 把「点歌词」注册到全局 [LyricController] 上。
+  ///
+  /// 必须幂等地**整体重设**，而不是叠加 —— 单例上后注册的覆盖先注册的，
+  /// 这里只需要保证「最后一次注册的是当前模式」。
+  void _applyTapLineCallback(_TapLineMode mode) {
+    _tapMode = mode;
+    final LyricsService lyrics = LyricsService.instance;
+    final FnPlayerService player = FnPlayerService.instance;
+    lyrics.controller.setOnTapLineCallback((Duration pos) {
+      // 无论是 seek 还是返回，都先收起拖动选中态 —— 否则残留的选中高亮会
+      // 传染给共享这个 controller 的歌词预览。
+      lyrics.controller.stopSelection();
+      if (mode == _TapLineMode.delegate) {
+        widget.onTapLine?.call();
+      } else {
+        player.seek(pos);
+      }
+    });
+  }
+
+  @override
+  void didUpdateWidget(PlayerLyricsView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final _TapLineMode desired = _desiredTapMode;
+    if (desired != _tapMode) _applyTapLineCallback(desired);
+  }
 
   @override
   void initState() {
     super.initState();
     _loadPrefs();
+    _tapMode = _desiredTapMode;
+    _applyTapLineCallback(_tapMode!);
     final controller = LyricsService.instance.controller;
     controller.selectedIndexNotifier.addListener(_onSelectionIndexChange);
     controller.isSelectingNotifier.addListener(_onSelectingChange);
@@ -557,6 +621,35 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
     );
   }
 
+  /// 切换时间轴微调浮层。
+  ///
+  /// 为什么是**就地展开的浮层**而不是二级面板：调偏移是「看着歌词、听着歌来回
+  /// 比对」的动作，任何盖住歌词的界面都会把它变成「调一下 → 关闭 → 查看 →
+  /// 再调」的开合循环。所以这里连弹窗都不开，只在歌词下方淡入一个小控件。
+  void _toggleOffsetBar() {
+    if (LyricsService.instance.snapshot.value.song == null) return;
+    // 只改 signal —— 见 [_offsetBarVisible] 的注释：走 setState 会让整个歌词页
+    // 跟着重建，正在滚动的歌词会整体跳一下。
+    _offsetBarVisible.value = !_offsetBarVisible.value;
+  }
+
+  /// 浮层里改动偏移。`null` = 打回基准（删掉这条记录）。
+  void _applyOffset(int? ms) {
+    if (ms == null) {
+      LyricsService.instance.clearCurrentOffset();
+      return;
+    }
+    LyricsService.instance.setCurrentOffset(ms);
+  }
+
+  void _resetOffset() {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    LyricsService.instance.clearCurrentOffset();
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('已还原为歌词自带的偏移')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -581,17 +674,6 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
         final selecting = lyrics.isSelectingSignal.value;
         final centered = _selectionCentered.value;
         final index = lyrics.selectedIndexSignal.value;
-        if (dragSeek != _tapSeekEnabled) {
-          _tapSeekEnabled = dragSeek;
-          if (dragSeek) {
-            lyrics.controller.setOnTapLineCallback((pos) {
-              lyrics.controller.stopSelection();
-              player.seek(pos);
-            });
-          } else {
-            lyrics.controller.cancelOnTapLineCallback();
-          }
-        }
         final hasTranslation =
             model?.lines.any(
               (line) => (line.translation ?? '').trim().isNotEmpty,
@@ -655,7 +737,13 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
                       return const SizedBox.shrink();
                     }
                     if (!hasLines) {
-                      return Center(
+                      // 无歌词时的占位块也要能点。
+                      //
+                      // 「点歌词 = 返回封面页」是挂在 LyricView 的**歌词行**上的
+                      // 回调，可这里根本没有歌词行 —— 不补这一层的话，纯音乐/
+                      // 没匹配到词的歌在歌词页就「点哪儿都回不去」，只能下拉关闭。
+                      final VoidCallback? onTap = widget.onTapLine;
+                      final Widget placeholder = Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
@@ -676,6 +764,12 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
                             ),
                           ],
                         ),
+                      );
+                      if (onTap == null) return placeholder;
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onTap: onTap,
+                        child: placeholder,
                       );
                     }
                     final hasKaraokeWords = model!.lines.any(
@@ -850,6 +944,25 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
               ),
             ),
             // 词/译 切换栏
+            // 时间轴微调浮层：**夹在歌词与操作栏之间**，歌词全程可见。
+            //
+            // 位置选在这个高度而不是压在歌词正中，是因为这个浮层的存在意义就是
+            // 「边看歌词边调」—— 放在歌词下方，既不遮当前句，也不会被后续滚上来的
+            // 新歌词顶走。
+            //
+            // `Watch` 把重建范围锁在这个小部件里：展开/收起时歌词列表一个像素
+            // 都不动（早先用 setState 会让整页重建，歌词会明显跳一下）。
+            Watch((_) {
+              final bool open = _offsetBarVisible.value;
+              return LyricOffsetBar(
+                offsetMs: lyrics.currentOffsetSignal.value ?? 0,
+                visible: open,
+                onChanged: _applyOffset,
+                onReset: _resetOffset,
+                onAutoClose: () => _offsetBarVisible.value = false,
+                backgroundColor: scheme.surface,
+              );
+            }),
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 8, 24, 4),
               child: LyricsActionsBar(
@@ -863,6 +976,15 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
                 originText: originText,
                 originHighlighted: originHighlighted,
                 onTapOrigin: _openLyricOriginSheet,
+                // 「时」按钮要显示浮层的开合态，但它只是整条操作栏里的一枚徽标。
+                // 把它单独抽成一个 widget 订阅 signal —— 展开/收起时只有这一枚
+                // 重绘，操作栏其余部分与歌词都不动。
+                offsetBar: OffsetBadgeSignal(
+                  open: _offsetBarVisible,
+                  onTap: _toggleOffsetBar,
+                  adjusted: lyrics.currentOffsetSignal.value != null,
+                  color: onSurface,
+                ),
                 color: onSurface,
               ),
             ),
