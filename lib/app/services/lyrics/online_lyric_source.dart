@@ -410,11 +410,42 @@ class OnlineLyricSource {
     final override = missStorePathOverride;
     if (override != null) return override;
     final dir = await getApplicationSupportDirectory();
-    final lyricsDir = Directory(p.join(dir.path, 'lyrics'));
-    if (!await lyricsDir.exists()) {
-      await lyricsDir.create(recursive: true);
+    // 失败记忆属于「在线」这一层：它记的是「这首歌试过哪些在线渠道、都没结果」。
+    // 放在 online/ 里面，清空在线歌词缓存时才会连它一起清掉 —— 否则就会出现
+    // 「缓存清干净了，但每首歌仍被十几天的旧失败记录挡在门外」。
+    final onlineDir = Directory(p.join(dir.path, 'lyrics', 'online'));
+    if (!await onlineDir.exists()) {
+      await onlineDir.create(recursive: true);
     }
-    return p.join(lyricsDir.path, 'online_misses.json');
+    final path = p.join(onlineDir.path, '_misses.json');
+    // 一次性迁移：早期版本把它放在 lyrics/ 根下。
+    try {
+      final legacy = File(p.join(dir.path, 'lyrics', 'online_misses.json'));
+      final current = File(path);
+      if (await legacy.exists() && !await current.exists()) {
+        await legacy.rename(path);
+      }
+    } catch (_) {
+      // 迁移失败不影响功能：只是需要重新试一轮而已。
+    }
+    return path;
+  }
+
+  /// 把渠道 id 换成人看的名字；未知 id 原样返回。
+  ///
+  /// 界面显示「歌词来自哪里」用它。某个渠道以后被移除时，历史记录里的旧 id
+  /// 仍然能原样显示出来，不会变成空白。
+  String displayNameFor(String sourceId) {
+    for (final source in sources) {
+      if (source.id == sourceId) return source.displayName;
+    }
+    return sourceId;
+  }
+
+  /// 忘掉某首歌的「都试过、没结果」记录，让它下次播放重新联网试一遍。
+  Future<void> clearMissFor(String guid) async {
+    final store = await _misses();
+    await store.clearSong(guid);
   }
 
   static String _formatLabel(LyricFormat format) {

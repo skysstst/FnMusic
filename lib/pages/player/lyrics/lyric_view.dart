@@ -7,11 +7,13 @@ import 'package:signals_flutter/signals_flutter.dart' hide computed;
 
 import '../../../app/services/lyrics/lyrics_service.dart';
 import '../../../app/services/lyrics/lyrics_view_colors.dart';
+import '../../../app/services/lyrics/online_lyric_source.dart';
 import '../../../app/services/player_service.dart';
 import '../../../app/state/player_state.dart';
 import '../../../app/state/settings_state.dart';
 import '../../../components/common/setting_widgets.dart';
 import '../widgets/player_bottom_panel.dart';
+import 'widgets/lyric_origin_sheet.dart';
 import 'widgets/lyrics_actions_bar.dart';
 import 'widgets/lyrics_drag_to_seek.dart';
 
@@ -518,6 +520,43 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
     );
   }
 
+  /// 打开「歌词来源」面板 —— 「重新匹配」也放在这里。
+  ///
+  /// 为什么把动作和来源信息摆在同一处：用户冒出「这词不对」这个念头的瞬间，
+  /// 想知道的正好是「它是哪来的、配的是谁的版本」，以及「能不能换一个」。
+  /// 拆到三个地方会让人来回找。
+  Future<void> _openLyricOriginSheet() async {
+    final lyrics = LyricsService.instance;
+    final song = lyrics.snapshot.value.song;
+    if (song == null) return;
+
+    // 先取 messenger 再 await，避免跨 async gap 用 context。
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final bool? wantRematch = await showLyricOriginSheet(
+      context: context,
+      songTitle: song.title,
+      origin: lyrics.currentOrigin.value,
+      hasLyric: lyrics.snapshot.value.status == LyricsLoadStatus.loaded,
+      onlineEnabled: OnlineLyricSource.instance.enabled,
+    );
+    if (wantRematch != true || !mounted) return;
+
+    messenger?.showSnackBar(
+      const SnackBar(content: Text('正在重新匹配歌词…')),
+    );
+    await lyrics.rematchCurrentSong();
+    if (!mounted) return;
+    messenger?.showSnackBar(
+      SnackBar(
+        content: Text(
+          lyrics.snapshot.value.status == LyricsLoadStatus.loaded
+              ? '歌词已更新'
+              : '还是没有找到这首歌的歌词',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -558,6 +597,27 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
               (line) => (line.translation ?? '').trim().isNotEmpty,
             ) ??
             false;
+
+        // 这份词是哪来的。放在这里算是因为它跟着 snapshotSignal 一起更新：
+        // LyricsService 会在写 snapshot 之前先把来源记好，所以这里读到的一定是
+        // 与当前屏幕上的歌词配套的那一份。
+        final bool hasLyric = snap.status == LyricsLoadStatus.loaded;
+        final String? sourceLabel = lyrics.currentSourceLabel;
+        final String originText;
+        final bool originHighlighted;
+        if (snap.status == LyricsLoadStatus.loading) {
+          originText = '正在寻找歌词…';
+          originHighlighted = false;
+        } else if (!hasLyric) {
+          originText = '没有找到歌词 · 点这里重新匹配';
+          originHighlighted = true;
+        } else if (sourceLabel == null) {
+          originText = '歌词来自音乐库';
+          originHighlighted = false;
+        } else {
+          originText = '歌词来自$sourceLabel · 查看详情';
+          originHighlighted = false;
+        }
 
         return Column(
           children: [
@@ -800,6 +860,9 @@ class _PlayerLyricsViewState extends State<PlayerLyricsView> with SignalsMixin {
                   _showTranslation.value = !showTranslation;
                   _setPrefBool(_prefsShowTranslation, _showTranslation.value);
                 },
+                originText: originText,
+                originHighlighted: originHighlighted,
+                onTapOrigin: _openLyricOriginSheet,
                 color: onSurface,
               ),
             ),

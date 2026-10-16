@@ -5,6 +5,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../../app/services/cover_local_cache.dart';
+import '../../app/services/lyrics/lyrics_repository.dart';
 import '../../app/services/player/stream_cache_service.dart';
 import '../../app/state/settings_state.dart';
 
@@ -22,8 +23,13 @@ class CacheSettingsPage extends StatefulWidget {
 }
 
 class _CacheSettingsPageState extends State<CacheSettingsPage> {
+  final LyricsRepository _lyricsRepo = LyricsRepository();
+
   int _artworkSize = 0;
-  int _lyricsSize = 0;
+  int _nasLyricsSize = 0;
+  int _onlineLyricsSize = 0;
+  int _nasLyricsCount = 0;
+  int _onlineLyricsCount = 0;
   int _streamSize = 0;
   bool _loading = true;
 
@@ -36,12 +42,23 @@ class _CacheSettingsPageState extends State<CacheSettingsPage> {
   Future<void> _loadCacheSizes() async {
     setState(() => _loading = true);
     final int artwork = await _getArtworkCacheSize();
-    final int lyrics = await _getLyricsCacheSize();
+    // 歌词按**来源**分开统计：音乐库自带的一层，我们联网补的一层。
+    // 合成一个数字会让人看不出「我到底补了多少首」，也清不干净其中一类。
+    final int nasLyrics = await _lyricsRepo.layerSize(LyricsCacheLayer.nas);
+    final int onlineLyrics =
+        await _lyricsRepo.layerSize(LyricsCacheLayer.online);
+    final int nasCount =
+        await _lyricsRepo.layerFileCount(LyricsCacheLayer.nas);
+    final int onlineCount =
+        await _lyricsRepo.layerFileCount(LyricsCacheLayer.online);
     final int stream = await StreamCacheService.instance.totalSize();
     if (!mounted) return;
     setState(() {
       _artworkSize = artwork;
-      _lyricsSize = lyrics;
+      _nasLyricsSize = nasLyrics;
+      _onlineLyricsSize = onlineLyrics;
+      _nasLyricsCount = nasCount;
+      _onlineLyricsCount = onlineCount;
       _streamSize = stream;
       _loading = false;
     });
@@ -61,16 +78,6 @@ class _CacheSettingsPageState extends State<CacheSettingsPage> {
     }
   }
 
-  /// 歌词缓存（getApplicationSupportDirectory()/lyrics）。
-  Future<int> _getLyricsCacheSize() async {
-    try {
-      final Directory dir = await getApplicationSupportDirectory();
-      return await _dirSize(Directory(p.join(dir.path, 'lyrics')));
-    } catch (_) {
-      return 0;
-    }
-  }
-
   Future<int> _dirSize(Directory dir) async {
     if (!await dir.exists()) return 0;
     int total = 0;
@@ -81,16 +88,6 @@ class _CacheSettingsPageState extends State<CacheSettingsPage> {
       }
     } catch (_) {}
     return total;
-  }
-
-  /// 删除目录内容（保留目录本身，避免后续写缓存报错）。
-  Future<void> _clearDirContents(Directory dir) async {
-    if (!await dir.exists()) return;
-    try {
-      await for (final FileSystemEntity e in dir.list(followLinks: false)) {
-        await e.delete(recursive: true);
-      }
-    } catch (_) {}
   }
 
   Future<bool> _confirm(String title, String content) async {
@@ -127,16 +124,40 @@ class _CacheSettingsPageState extends State<CacheSettingsPage> {
     _toast('封面缓存已清除');
   }
 
-  Future<void> _clearLyricsCache() async {
-    if (!await _confirm('清除歌词缓存', '确定要清除歌词缓存吗？本地歌词会在需要时重新获取。')) {
+  /// 清除音乐库歌词缓存。
+  ///
+  /// 这里只说清本机缓存 —— 用户的歌词文件在服务器上，本 App 从不改它，
+  /// 说明白这一点，这类"清除"按钮才不会被当成危险操作。
+  Future<void> _clearNasLyricsCache() async {
+    if (!await _confirm(
+      '清除音乐库歌词缓存',
+      '确定要清除音乐库歌词的本地缓存吗？下次播放会重新从音乐库获取。'
+          '你的音乐库里、服务器上的文件不会被改动。',
+    )) {
       return;
     }
     setState(() => _loading = true);
-    final Directory dir = await getApplicationSupportDirectory();
-    await _clearDirContents(Directory(p.join(dir.path, 'lyrics')));
+    await _lyricsRepo.clearLayer(LyricsCacheLayer.nas);
     if (!mounted) return;
     await _loadCacheSizes();
-    _toast('歌词缓存已清除');
+    _toast('音乐库歌词缓存已清除');
+  }
+
+  /// 清除联网刮来的歌词缓存。
+  Future<void> _clearOnlineLyricsCache() async {
+    if (!await _confirm(
+      '清除刮削歌词',
+      '确定要清除联网刮到的歌词吗？这些歌词会被删掉，'
+          '下次播放需要重新联网查找（可能变慢，也可能因为限流暂时找不到）。'
+          '你的音乐库、服务器上的文件不会被改动。',
+    )) {
+      return;
+    }
+    setState(() => _loading = true);
+    await _lyricsRepo.clearLayer(LyricsCacheLayer.online);
+    if (!mounted) return;
+    await _loadCacheSizes();
+    _toast('刮削歌词已清除');
   }
 
   Future<void> _clearStreamCache() async {
@@ -188,11 +209,36 @@ class _CacheSettingsPageState extends State<CacheSettingsPage> {
             onTap: _loading ? null : _clearArtworkCache,
           ),
           _CacheTile(
-            icon: Icons.description_outlined,
+            icon: Icons.library_music_outlined,
             iconColor: scheme.secondary,
-            title: '歌词缓存',
-            subtitle: _loading ? '计算中…' : '占用空间：${_formatSize(_lyricsSize)}',
-            onTap: _loading ? null : _clearLyricsCache,
+            title: '音乐库歌词',
+            subtitle: _loading
+                ? '计算中…'
+                : '占用空间：${_formatSize(_nasLyricsSize)}'
+                    ' · $_nasLyricsCount 首',
+            onTap: _loading ? null : _clearNasLyricsCache,
+          ),
+          _CacheTile(
+            icon: Icons.cloud_download_outlined,
+            iconColor: scheme.secondary,
+            title: '联网刮削歌词',
+            subtitle: _loading
+                ? '计算中…'
+                : '占用空间：${_formatSize(_onlineLyricsSize)}'
+                    ' · $_onlineLyricsCount 首',
+            onTap: _loading ? null : _clearOnlineLyricsCache,
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
+            child: Text(
+              '歌词分两类：音乐库自带的一份、本 App 联网补齐的一份。'
+              '播放时优先用音乐库的，音乐库没有才用刮削的。'
+              '两类都能单独清，清掉的只在本机重下，不改动服务器上的任何文件。',
+              style: Theme.of(context)
+                  .textTheme
+                  .bodySmall
+                  ?.copyWith(color: scheme.onSurfaceVariant),
+            ),
           ),
           _CacheTile(
             icon: Icons.audiotrack_outlined,

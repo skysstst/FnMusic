@@ -247,15 +247,46 @@ class LyricsParser {
     return Duration(minutes: mm, seconds: ss, milliseconds: ms);
   }
 
+  /// LRC 的 `[offset:±毫秒]` 标签。
+  static final RegExp _offsetTag = RegExp(
+    r'\[offset:\s*([+-]?\d+)\s*\]',
+    caseSensitive: false,
+  );
+
+  /// 解析 `[offset:±ms]` 校正量。
+  ///
+  /// 语义与主流播放器一致：正值表示歌词**整体延后**这么多毫秒，做法就是把每行的
+  /// 时间戳都加上它。
+  ///
+  /// 为什么必须处理：翻唱 / 现场 / 自制版与原版的时长和起唱点往往不同，这类歌词
+  /// 文件普遍靠 `[offset:]` 把时间轴对齐。原实现把它当普通元数据一行 `continue`
+  /// 掉了 —— 结果**文件里明明写了校正量，我们却把整首歌渲染成偏移的**，而且没有
+  /// 任何提示让用户知道。这是「读错了数据」，不是缺功能。
+  ///
+  /// 注意：这里**不把负偏移钳到 0**。钳了会让开头的几行撞在同一个时间戳上，被
+  /// 去重逻辑当成重复行丢掉 —— 那是真的丢数据。负数只是个起点，后续渲染按进度
+  /// 推进，不会出问题。
+  static Duration _parseOffset(String lrc) {
+    final m = _offsetTag.firstMatch(lrc);
+    if (m == null) return Duration.zero;
+    final ms = int.tryParse(m.group(1) ?? '');
+    if (ms == null || ms == 0) return Duration.zero;
+    return Duration(milliseconds: ms);
+  }
+
   static List<ParsedLyricLine> parseLrc(String lrc) {
     final lines = <ParsedLyricLine>[];
     final rawLines = lrc
         .split(RegExp(r'\r?\n'))
         .where((e) => e.trim().isNotEmpty);
     final timeReg = RegExp(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]');
+    // 整首歌共用一个校正量，见 [_parseOffset]。
+    final offset = _parseOffset(lrc);
 
     for (final raw in rawLines) {
-      if (RegExp(r'^\[(ti|ar|al|by|offset):').hasMatch(raw.toLowerCase())) {
+      // 前面的 `\s*` 是必要的：带缩进的元数据行匹配不上就会被当成一句歌词，
+      // 于是 `[offset:-500]` 会以一句「歌词」的形态出现在屏幕上。
+      if (RegExp(r'^\s*\[(ti|ar|al|by|offset):').hasMatch(raw.toLowerCase())) {
         continue;
       }
       final matches = timeReg.allMatches(raw).toList();
@@ -312,7 +343,7 @@ class LyricsParser {
       }
 
       for (final m in validMatches) {
-        final d = _parseTimeMatch(m);
+        final d = _parseTimeMatch(m) + offset;
         if (mainText.isNotEmpty ||
             (transText != null && transText.isNotEmpty)) {
           if (transText == null && lines.isNotEmpty) {
@@ -630,9 +661,11 @@ class LyricsParser {
         .where((e) => e.trim().isNotEmpty);
     final timeReg = RegExp(r'\[(\d{1,2}):(\d{2})(?:\.(\d{1,3}))?\]');
     final seenTimes = <int>{};
+    // 整首歌共用一个校正量，见 [_parseOffset]。
+    final offset = _parseOffset(lrc);
 
     for (final raw in rawLines) {
-      if (RegExp(r'^\[(ti|ar|al|by|offset):').hasMatch(raw.toLowerCase())) {
+      if (RegExp(r'^\s*\[(ti|ar|al|by|offset):').hasMatch(raw.toLowerCase())) {
         continue;
       }
       final matches = timeReg.allMatches(raw).toList();
@@ -672,7 +705,8 @@ class LyricsParser {
       if (mainText.isEmpty) continue;
 
       if (hasInterleavedText) {
-        final timestamps = matches.map(_parseTimeMatch).toList();
+        final timestamps =
+            matches.map((m) => _parseTimeMatch(m) + offset).toList();
         final words = <fl.LyricWord>[];
         for (int i = 0; i < matches.length; i++) {
           final segStart = matches[i].end;
@@ -721,7 +755,7 @@ class LyricsParser {
       } else {
         final effectiveMatches = isEndTimestampLine ? [matches.first] : matches;
         for (final m in effectiveMatches) {
-          final d = _parseTimeMatch(m);
+          final d = _parseTimeMatch(m) + offset;
           final incoming = fl.LyricLine(
             start: d,
             text: mainText,
