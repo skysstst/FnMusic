@@ -16,6 +16,7 @@ import '../../app/state/song_state.dart';
 import '../../components/common/artwork_widget.dart';
 import '../../components/player/lyric_preview.dart';
 import 'lyrics/lyric_view.dart';
+import 'widgets/album_swipe_layer.dart';
 import 'widgets/player_background.dart';
 import 'widgets/player_bottom_panel.dart';
 import 'widgets/player_header.dart';
@@ -35,8 +36,19 @@ class _PlayerPageState extends State<PlayerPage>
     with SingleTickerProviderStateMixin {
   final FnPlayerService _player = FnPlayerService.instance;
 
-  /// 封面页 / 歌词页左右滑动的页码控制器。
+  /// 封面页 / 歌词页的页码控制器。
+  ///
+  /// 页面**不可手势滑动**（[PageView] 的 physics 被锁成
+  /// [NeverScrollableScrollPhysics]），切换只能靠点击 —— 因为横向手势已经
+  /// 改派给「上一首 / 下一首」了。见 [_onAlbumSwipe]。
   late final PageController _pageController = PageController();
+
+  /// 切页动画进行中：屏蔽手势，避免动画途中被再次触发。
+  bool _switching = false;
+
+  /// 当前是否停在歌词页。只用于手势守卫，不驱动任何重建 ——
+  /// 页面内容由 [PageController] 自己的动画负责。
+  bool _lyricsVisible = false;
 
   /// 当前下拉位移（用于 Transform.translate / Opacity / ClipRRect）。
   final ValueNotifier<double> _dismissOffset = ValueNotifier<double>(0);
@@ -72,13 +84,33 @@ class _PlayerPageState extends State<PlayerPage>
     super.dispose();
   }
 
-  /// 切换到歌词页（第 1 页）。
-  void _openLyricsPage() {
-    _pageController.animateToPage(
+  // ---------- 封面页 ⇄ 歌词页（点击切换，无滑动）----------
+
+  /// 切到歌词页。
+  ///
+  /// 只能由点击触发（封面页空白处 / 封面页里的歌词预览 / 底栏迷你歌词），
+  /// 不能靠滑动 —— 横向手势现在是「上一首 / 下一首」。
+  Future<void> _openLyricsPage() async {
+    if (_switching || _lyricsVisible) return;
+    _switching = true;
+    await _pageController.animateToPage(
       1,
       duration: const Duration(milliseconds: 280),
       curve: Curves.easeOut,
     );
+    _switching = false;
+  }
+
+  /// 回到封面页。
+  Future<void> _closeLyricsPage() async {
+    if (_switching || !_lyricsVisible) return;
+    _switching = true;
+    await _pageController.animateToPage(
+      0,
+      duration: const Duration(milliseconds: 260),
+      curve: Curves.easeOut,
+    );
+    _switching = false;
   }
 
   // ---------- 拖拽下拉关闭 ----------
@@ -215,12 +247,20 @@ class _PlayerPageState extends State<PlayerPage>
                           PlayerHeader(songSignal: _songSignal),
                         Expanded(
                           // 第 0 页封面布局，第 1 页歌词页。
+                          //
+                          // physics 锁成 [NeverScrollableScrollPhysics]：这一对
+                          // 页面**彻底不再靠滑动切换**，横向手势已改派给切歌
+                          // （见 [_onAlbumSwipe]）。仍保留 PageView 是为了保留
+                          // animateToPage 的转场动画 —— 用 IndexedStack 的话
+                          // 切换就是硬切，视觉上像闪了一下。
                           child: PageView(
                             controller: _pageController,
+                            physics: const NeverScrollableScrollPhysics(),
                             onPageChanged: (int page) {
-                              // 离开歌词页（切回封面页）时释放全局拖动选中状态：
+                              _lyricsVisible = page == 1;
+                              // 离开歌词页时释放全局拖动选中状态：
                               // LyricController 是全局单例，歌词页拖动选中后若直接
-                              // 横滑回封面页，残留状态会传染给共享 controller 的
+                              // 切回封面页，残留状态会传染给共享 controller 的
                               // 歌词预览（底栏迷你歌词/海报预览）。
                               if (page != 1) {
                                 LyricsService.instance.controller
@@ -228,19 +268,23 @@ class _PlayerPageState extends State<PlayerPage>
                               }
                             },
                             children: <Widget>[
-                              if (isPoster)
-                                _PosterPlayerLayout(
-                                  player: _player,
-                                  songSignal: _songSignal,
-                                  onTapLyrics: _openLyricsPage,
-                                )
-                              else
-                                _MobilePlayerLayout(
-                                  player: _player,
-                                  songSignal: _songSignal,
-                                  stylePreset: preset,
-                                  onTapLyrics: _openLyricsPage,
-                                ),
+                              AlbumSwipeLayer(
+                                onNext: _player.next,
+                                onPrevious: _player.previousTrack,
+                                onTap: _openLyricsPage,
+                                child: isPoster
+                                    ? _PosterPlayerLayout(
+                                        player: _player,
+                                        songSignal: _songSignal,
+                                        onTapLyrics: _openLyricsPage,
+                                      )
+                                    : _MobilePlayerLayout(
+                                        player: _player,
+                                        songSignal: _songSignal,
+                                        stylePreset: preset,
+                                        onTapLyrics: _openLyricsPage,
+                                      ),
+                              ),
                               if (isPoster)
                                 // SafeArea 关闭（封面延伸到屏幕边缘），歌词页
                                 // 手动补回顶部/底部 inset，防止歌词行滑入
@@ -250,15 +294,17 @@ class _PlayerPageState extends State<PlayerPage>
                                     top: MediaQuery.paddingOf(context).top,
                                     bottom: MediaQuery.paddingOf(context).bottom,
                                   ),
-                                  child: const PlayerLyricsView(
+                                  child: PlayerLyricsView(
                                     showControls: true,
                                     fadeEdges: true,
+                                    onTapLine: _closeLyricsPage,
                                   ),
                                 )
                               else
-                                const PlayerLyricsView(
+                                PlayerLyricsView(
                                   showControls: true,
                                   fadeEdges: true,
+                                  onTapLine: _closeLyricsPage,
                                 ),
                             ],
                           ),

@@ -275,6 +275,16 @@ class FnPlayerService {
     await _advance(forward: false);
   }
 
+  /// 强制切到上一首，**不管当前播放位置**。
+  ///
+  /// 跟 [previous] 的区别：后者在播过 3 秒后会 seek 回曲首 —— 那是给「上一首
+  /// 按钮」准备的语义（连着按两下才是上一首，符合多数播放器的直觉）。
+  ///
+  /// 但**横向滑动手势**的意图没有歧义：手指向左就是「我要上一首」。
+  /// 若复用 [previous]，会出现「滑了半天歌没变，只有进度条跳回 0」——
+  /// 手势看起来完全失灵。所以这里走一条不受位置影响的通道。
+  Future<void> previousTrack() => _advance(forward: false);
+
   /// 跳到队列 [index]。
   Future<void> skipTo(int index) async {
     if (index < 0 || index >= _q.items.length) return;

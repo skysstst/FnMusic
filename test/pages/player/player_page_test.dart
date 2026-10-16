@@ -311,4 +311,44 @@ void main() {
     expect(find.text('开始定时'), findsOneWidget);
     expect(find.byType(Slider), findsWidgets);
   });
+
+  // ---------- 封面页 ⇄ 歌词页：点击切换，横向手势归切歌 ----------
+
+  testWidgets('封面页与歌词页之间彻底关闭滑动切换', (
+    WidgetTester tester,
+  ) async {
+    _loadPlayingState();
+    await _pumpPlayer(tester);
+
+    final PageView pageView = tester.widget<PageView>(find.byType(PageView));
+    expect(
+      pageView.physics,
+      isA<NeverScrollableScrollPhysics>(),
+      reason: '这两页必须靠点击切换 —— 横向手势已经改派给上一首/下一首，'
+          '留着滑动会让两个手势互相抢，用户往左滑不知道会翻页还是切歌',
+    );
+  });
+
+  testWidgets('封面页空白处单击进入歌词页', (WidgetTester tester) async {
+    _loadPlayingState();
+    await _pumpPlayer(tester);
+
+    // 判别标志用歌词页操作栏的「时」徽标 —— 封面页没有它。
+    expect(find.text('时'), findsNothing);
+
+    // 点封面区空白（避开底部进度条与按钮）。
+    await tester.tapAt(const Offset(400, 150));
+    await tester.pumpAndSettle();
+
+    expect(find.text('时'), findsOneWidget);
+  });
+  testWidgets('封面页横滑切歌后不会翻到歌词页', (WidgetTester tester) async {
+    _loadPlayingState();
+    await _pumpPlayer(tester);
+
+    await tester.dragFrom(const Offset(400, 150), const Offset(-200, 0));
+    await tester.pumpAndSettle();
+
+    expect(find.text('时'), findsNothing);
+  });
 }
