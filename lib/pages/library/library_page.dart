@@ -27,14 +27,20 @@ class LibraryPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('音乐库')),
-      body: GridView.count(
-        padding: const EdgeInsets.all(16),
-        crossAxisCount: 3,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        children: _entries.map((_LibraryEntry e) {
-          return _LibraryEntryCard(entry: e);
-        }).toList(),
+      // 横屏 / 车机大屏下列数增多，避免格子被拉宽变形。
+      body: LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final int columns = constraints.maxWidth >= 720 ? 5 : 3;
+          return GridView.count(
+            padding: const EdgeInsets.all(16),
+            crossAxisCount: columns,
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            children: _entries.map((_LibraryEntry e) {
+              return _LibraryEntryCard(entry: e);
+            }).toList(),
+          );
+        },
       ),
     );
   }

@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_lyric/core/lyric_model.dart' as fl;
 import 'package:signals_flutter/signals_flutter.dart' hide computed;
 
@@ -186,6 +187,38 @@ class _PlayerPageState extends State<PlayerPage>
 
   @override
   Widget build(BuildContext context) {
+    // 键盘快捷键（车机遥控器 / D-pad / 物理键盘）：
+    // 空格 = 播放/暂停，左右方向键 = 快退/快进 10 秒。
+    // 车机大屏上用户主要用遥控器操作，这些按键映射是
+    // 小米大屏 UX 标准 L2 的媒体播放场景要求。
+    return CallbackShortcuts(
+      bindings: <LogicalKeySet, VoidCallback>{
+        LogicalKeySet(LogicalKeyboardKey.space): () {
+          _player.togglePlayPause();
+        },
+        LogicalKeySet(LogicalKeyboardKey.arrowLeft): () {
+          _seekBy(const Duration(seconds: -10));
+        },
+        LogicalKeySet(LogicalKeyboardKey.arrowRight): () {
+          _seekBy(const Duration(seconds: 10));
+        },
+      },
+      child: _buildPage(),
+    );
+  }
+
+  /// 相对当前位置 seek（键盘快捷键用）。
+  void _seekBy(Duration offset) {
+    final Duration position = AppPlayerState.instance.positionSignal.value;
+    final Duration? duration = AppPlayerState.instance.durationSignal.value;
+    if (duration == null || duration <= Duration.zero) return;
+    final int targetMs =
+        (position.inMilliseconds + offset.inMilliseconds)
+            .clamp(0, duration.inMilliseconds);
+    _player.seek(Duration(milliseconds: targetMs));
+  }
+
+  Widget _buildPage() {
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (bool didPop, Object? result) {
@@ -332,7 +365,12 @@ class _PlayerPageState extends State<PlayerPage>
   }
 }
 
-/// 经典布局：居中封面 + 底部控制面板（含迷你歌词预览）。
+/// 经典布局：竖屏为「封面居中 + 底部控制面板」；横屏（车机全屏 /
+/// 平板横屏）改为左右分栏 —— 封面在左，控制在右。
+///
+/// 竖屏布局在横屏下会把封面压成宽扁条、底部面板占掉半屏，
+/// 车机大屏上尤其难看。横屏分栏后封面保持正方形、控制区
+/// 获得独立列宽，两者都不再被拉伸。
 class _MobilePlayerLayout extends StatelessWidget {
   final FnPlayerService player;
   final Signal<SongEntity?> songSignal;
@@ -348,6 +386,14 @@ class _MobilePlayerLayout extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final Size size = MediaQuery.sizeOf(context);
+    if (size.width > size.height) {
+      return _buildLandscape();
+    }
+    return _buildPortrait();
+  }
+
+  Widget _buildPortrait() {
     return Column(
       children: <Widget>[
         Expanded(
@@ -359,6 +405,36 @@ class _MobilePlayerLayout extends StatelessWidget {
           onTapLyrics: onTapLyrics,
         ),
       ],
+    );
+  }
+
+  Widget _buildLandscape() {
+    return Padding(
+      // 横屏下高度是瓶颈，封面不再用 32px 大内边距，
+      // 收紧到 16 给正方形封面留出更多空间。
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          // 左侧：封面（正方形，受高度约束）。
+          Expanded(
+            flex: 5,
+            child: Center(child: _PlayerArtwork(songSignal: songSignal)),
+          ),
+          const SizedBox(width: 16),
+          // 右侧：进度 + 控制 + 操作。隐藏迷你歌词 —— 歌词页仍可
+          // 点击进入，横屏空间宝贵，不重复占一行。
+          Expanded(
+            flex: 4,
+            child: PlayerBottomPanel(
+              player: player,
+              stylePreset: stylePreset,
+              onTapLyrics: onTapLyrics,
+              showMiniLyrics: false,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
