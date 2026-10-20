@@ -28,17 +28,42 @@ class ArtworkWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // 防御：非有限/非法尺寸（如 double.infinity）回退默认 48，避免占位
-    // 字号计算出 infinity 崩溃。
     final double? s = size;
-    final double edge =
-        (s == null || !s.isFinite || s <= 0) ? 48 : s;
-    final BorderRadius radius =
-        borderRadius ?? BorderRadius.circular(edge * 0.22);
     final ColorScheme scheme = Theme.of(context).colorScheme;
 
+    // `size: double.infinity` 语义是「铺满父约束」（专辑网格等单元格尺寸
+    // 随列数变化的场景）。它不能直接参与字号计算，所以走 LayoutBuilder
+    // 取实际约束；其余非有限值仍回退 48，避免占位字号算出 infinity 崩溃。
+    if (s != null && !s.isFinite) {
+      return LayoutBuilder(
+        builder: (BuildContext context, BoxConstraints constraints) {
+          final double w = constraints.maxWidth.isFinite && constraints.maxWidth > 0
+              ? constraints.maxWidth
+              : 48;
+          final double h = constraints.maxHeight.isFinite && constraints.maxHeight > 0
+              ? constraints.maxHeight
+              : w;
+          final BorderRadius radius =
+              borderRadius ?? BorderRadius.circular(w * 0.22);
+          return _render(w, h, radius, scheme);
+        },
+      );
+    }
+
+    final double edge = (s == null || s <= 0) ? 48 : s;
+    final BorderRadius radius =
+        borderRadius ?? BorderRadius.circular(edge * 0.22);
+    return _render(edge, edge, radius, scheme);
+  }
+
+  Widget _render(
+    double width,
+    double height,
+    BorderRadius radius,
+    ColorScheme scheme,
+  ) {
     if (imageUrl == null || imageUrl!.isEmpty) {
-      return _placeholder(context, edge, radius, scheme);
+      return _placeholder(width, height, radius, scheme);
     }
 
     return ClipRRect(
@@ -46,27 +71,29 @@ class ArtworkWidget extends StatelessWidget {
       child: CachedNetworkImage(
         imageUrl: imageUrl!,
         httpHeaders: ApiClient.imageAuthHeaders(),
-        width: edge,
-        height: edge,
+        width: width,
+        height: height,
         fit: BoxFit.cover,
         placeholder: (context, url) =>
-            _placeholder(context, edge, radius, scheme),
+            _placeholder(width, height, radius, scheme),
         errorWidget: (context, url, error) =>
-            _placeholder(context, edge, radius, scheme),
+            _placeholder(width, height, radius, scheme),
       ),
     );
   }
 
   Widget _placeholder(
-    BuildContext context,
-    double edge,
+    double width,
+    double height,
     BorderRadius radius,
     ColorScheme scheme,
   ) {
+    // 字号/图标以短边为基准：铺满模式下网格单元可能是长方形。
+    final double edge = width < height ? width : height;
     final String? text = placeholderText?.trim();
     return Container(
-      width: edge,
-      height: edge,
+      width: width,
+      height: height,
       decoration: BoxDecoration(
         borderRadius: radius,
         gradient: LinearGradient(
