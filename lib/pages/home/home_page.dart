@@ -16,6 +16,7 @@ import '../../app/services/player_service.dart';
 import '../../app/services/session_cache.dart';
 import '../../app/state/song_state.dart';
 import '../../components/common/artwork_widget.dart';
+import '../../components/common/responsive_body.dart';
 import '../library/albums_page.dart';
 import '../library/artists_page.dart';
 import '../library/genres_page.dart';
@@ -406,9 +407,10 @@ class _HomePageState extends State<HomePage> {
     }
     return RefreshIndicator(
       onRefresh: () => _loadAll(forceRefresh: true),
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 160),
+      child: ResponsiveBody(
+        child: ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 160),
         children: <Widget>[
           // 1. 漫游 Hero Banner
           if (_roamSong != null) ...[
@@ -538,6 +540,7 @@ class _HomePageState extends State<HomePage> {
               _recentTracks.isEmpty)
             const _HomeEmptyState(text: '还没有数据，下拉刷新试试'),
         ],
+      ),
       ),
     );
   }

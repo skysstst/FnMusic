@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:fnmusic/app/state/song_state.dart';
 import 'package:fnmusic/pages/player/widgets/album_swipe_layer.dart';
 
 /// 记录切歌回调，不触碰播放器服务。
@@ -14,10 +15,14 @@ class _SwipeSpy {
   int taps = 0;
 }
 
+const SongEntity _songA = SongEntity(guid: 'a', title: 'A');
+const SongEntity _songB = SongEntity(guid: 'b', title: 'B');
+
 /// 把 [AlbumSwipeLayer] 挂进视口。
 ///
-/// [onLayer] 在 pumpWidget 之后用来回读 layer 本身（读跟手位移）。
-Widget _host(_SwipeSpy spy) {
+/// [song] 可切换：提交吸附结束后层会等「歌曲信号切过来」再归位，
+/// 测试里换一个 song 实例模拟这一步（真实链路里 onNext 会异步更新信号）。
+Widget _host(_SwipeSpy spy, {SongEntity song = _songA}) {
   return MaterialApp(
     home: Scaffold(
       body: Center(
@@ -28,7 +33,10 @@ Widget _host(_SwipeSpy spy) {
             onNext: () => spy.next++,
             onPrevious: () => spy.previous++,
             onTap: () => spy.taps++,
-            child: const ColoredBox(color: Color(0xFF000000)),
+            currentSong: song,
+            currentCover: const ColoredBox(color: Color(0xFF000000)),
+            nextCover: const ColoredBox(color: Color(0xFF111111)),
+            previousCover: const ColoredBox(color: Color(0xFF222222)),
           ),
         ),
       ),
@@ -36,7 +44,7 @@ Widget _host(_SwipeSpy spy) {
   );
 }
 
-/// 读当前挂载的 State —— [AlbumSwipeLayerState.dragDx] 就是跟手位移。
+/// 读当前挂载的 State —— [AlbumSwipeLayerState.offset] 就是跟手位移。
 AlbumSwipeLayerState _stateOf(WidgetTester tester) =>
     tester.state<AlbumSwipeLayerState>(find.byType(AlbumSwipeLayer));
 
@@ -92,6 +100,9 @@ void main() {
 
     await tester.dragFrom(const Offset(200, 300), const Offset(-200, 0));
     await tester.pumpAndSettle();
+    // 模拟歌曲信号切过来（真实链路里 onNext 异步更新）
+    await tester.pumpWidget(_host(spy, song: _songB));
+    await tester.pumpAndSettle();
 
     expect(spy.next, 1);
     expect(spy.previous, 0);
@@ -102,6 +113,8 @@ void main() {
     await tester.pumpWidget(_host(spy));
 
     await tester.dragFrom(const Offset(200, 300), const Offset(200, 0));
+    await tester.pumpAndSettle();
+    await tester.pumpWidget(_host(spy, song: _songB));
     await tester.pumpAndSettle();
 
     expect(spy.previous, 1);
@@ -119,7 +132,37 @@ void main() {
     expect(spy.previous, 0);
   });
 
-  testWidgets('单击触发 onTap（点空白处进歌词页的入口）', (
+  testWidgets('目标方向无封面时回弹不切歌（队列到头）', (
+    WidgetTester tester,
+  ) async {
+    final _SwipeSpy spy = _SwipeSpy();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: SizedBox(
+              width: 400,
+              height: 600,
+              child: AlbumSwipeLayer(
+                onNext: () => spy.next++,
+                onPrevious: () => spy.previous++,
+                currentSong: _songA,
+                currentCover: const ColoredBox(color: Color(0xFF000000)),
+                // nextCover 为 null：没有下一首
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    await tester.dragFrom(const Offset(200, 300), const Offset(-200, 0));
+    await tester.pumpAndSettle();
+
+    expect(spy.next, 0, reason: '没有下一首时必须回弹，不能空切');
+  });
+
+  testWidgets('单击触发 onTap（点封面进歌词页的入口）', (
     WidgetTester tester,
   ) async {
     final _SwipeSpy spy = _SwipeSpy();
@@ -152,7 +195,7 @@ void main() {
     }
 
     expect(
-      state.dragDx.value,
+      state.offset.value,
       closeTo(-80, 0.5),
       reason: '拖动中内容要跟着手指走，否则切歌像「突然跳过去」',
     );
@@ -161,7 +204,7 @@ void main() {
     await tester.pumpAndSettle();
   });
 
-  testWidgets('松手后位移归零（回弹），不残留偏移', (
+  testWidgets('松手后提交切歌并归位（位移回零，不残留偏移）', (
     WidgetTester tester,
   ) async {
     final _SwipeSpy spy = _SwipeSpy();
@@ -177,11 +220,14 @@ void main() {
     }
     await gesture.up();
     await tester.pumpAndSettle();
+    // 模拟歌曲信号切过来，层才从吸附态归位
+    await tester.pumpWidget(_host(spy, song: _songB));
+    await tester.pumpAndSettle();
 
-    expect(state.dragDx.value, 0);
+    expect(state.offset.value, 0);
   });
 
-  testWidgets('跟手位移不超过 1/3 屏宽（到底后不再跟随）', (
+  testWidgets('跟手位移不超过一个槽宽（到底后不再跟随）', (
     WidgetTester tester,
   ) async {
     final _SwipeSpy spy = _SwipeSpy();
@@ -191,19 +237,49 @@ void main() {
     final TestGesture gesture = await tester.startGesture(
       const Offset(350, 300),
     );
-    // 视口 800 宽 → 上限 800/3 ≈ 266.7；这里拖 600，期望被夹住。
+    // 舞台 400×600 → 槽宽（最短边）400；这里拖 600，期望被夹住。
     for (int i = 0; i < 30; i++) {
       await gesture.moveBy(const Offset(-20, 0));
       await tester.pump();
     }
 
     expect(
-      state.dragDx.value,
-      closeTo(-800 / 3, 0.5),
-      reason: '要有「已经到底」的物理反馈，不能无限拖',
+      state.offset.value,
+      closeTo(-400, 0.5),
+      reason: '要有「已经到底」的物理反馈：相邻封面完全就位后不再跟随',
     );
 
     await gesture.up();
+    await tester.pumpAndSettle();
+  });
+
+  testWidgets('回弹动画可被打断并从当前位移接管', (WidgetTester tester) async {
+    final _SwipeSpy spy = _SwipeSpy();
+    await tester.pumpWidget(_host(spy));
+    final AlbumSwipeLayerState state = _stateOf(tester);
+
+    // 小幅拖动（不提交）→ 松手 → 回弹动画开始
+    final TestGesture gesture = await tester.startGesture(
+      const Offset(200, 300),
+    );
+    for (int i = 0; i < 2; i++) {
+      await gesture.moveBy(const Offset(-20, 0));
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pump(); // 回弹动画进行中（未 settle）
+
+    // 中途再次触摸：从当前位移接管，而不是被动画拽走
+    final TestGesture gesture2 = await tester.startGesture(
+      const Offset(200, 300),
+    );
+    await gesture2.moveBy(const Offset(-30, 0));
+    await tester.pump();
+
+    final double taken = state.offset.value;
+    expect(taken, lessThan(0), reason: '打断后应停在回弹途中的位移上');
+
+    await gesture2.up();
     await tester.pumpAndSettle();
   });
 }

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../app/router/app_router.dart';
+import '../../components/common/responsive_body.dart';
 import 'listening_report_page.dart';
 import 'listening_stats_page.dart';
 
@@ -22,24 +23,26 @@ class ProfilePage extends StatelessWidget {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: <Widget>[
-          _ProfileEntry(
-            icon: Icons.bar_chart,
-            color: scheme.primary,
-            title: '听歌统计',
-            subtitle: '收听时长 · 播放次数 · 热门歌曲',
-            onTap: () => Navigator.of(context).pushNamed(ListeningStatsPage.route),
-          ),
-          _ProfileEntry(
-            icon: Icons.auto_awesome,
-            color: scheme.tertiary,
-            title: '听歌报告',
-            subtitle: '年度 / 月度收听可视化报告',
-            onTap: () => Navigator.of(context).pushNamed(ListeningReportPage.route),
-          ),
-        ],
+      body: ResponsiveBody(
+        child: ListView(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          children: <Widget>[
+            _ProfileEntry(
+              icon: Icons.bar_chart,
+              color: scheme.primary,
+              title: '听歌统计',
+              subtitle: '收听时长 · 播放次数 · 热门歌曲',
+              onTap: () => Navigator.of(context).pushNamed(ListeningStatsPage.route),
+            ),
+            _ProfileEntry(
+              icon: Icons.auto_awesome,
+              color: scheme.tertiary,
+              title: '听歌报告',
+              subtitle: '年度 / 月度收听可视化报告',
+              onTap: () => Navigator.of(context).pushNamed(ListeningReportPage.route),
+            ),
+          ],
+        ),
       ),
     );
   }

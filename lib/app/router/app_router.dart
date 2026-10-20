@@ -79,8 +79,11 @@ class PrimaryNavigationShell extends StatefulWidget {
 class _PrimaryNavigationShellState extends State<PrimaryNavigationShell> {
   int _index = 0;
 
-  /// 宽屏断点：达到此宽度切换为侧边栏导航（平板布局）。
-  static const double _sideNavBreakpoint = 720;
+  /// 宽屏断点：达到此宽度切换为侧边栏导航（平板 / 车机布局）。
+  ///
+  /// 600dp = Material Design 中屏断点（小米大屏适配标准同此）：
+  /// 车机 1/3 窗口（约 480dp）走底部导航，2/3 与全屏窗口走侧边栏。
+  static const double _sideNavBreakpoint = 600;
 
   static const List<Widget> _pages = <Widget>[
     HomePage(),

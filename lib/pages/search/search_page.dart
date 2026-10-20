@@ -4,6 +4,7 @@ import '../../app/services/feiniu/feiniu_services.dart';
 import '../../app/services/player_service.dart';
 import '../../app/state/song_state.dart';
 import '../../components/list/media_list_tile.dart';
+import '../../components/common/responsive_body.dart';
 import '../../components/playlist/track_actions_menu.dart';
 import '../library/library_detail_pages.dart';
 import '../player/player_route.dart';
@@ -109,13 +110,14 @@ class _SearchPageState extends State<SearchPage> {
       return _buildEmpty('未找到相关结果');
     }
 
-    return ListView(
-      children: <Widget>[
-        if (_tracks.isNotEmpty) ...<Widget>[
-          _sectionHeader('歌曲'),
-          ..._tracks.map((SongEntity song) => MediaListTile(
-                imageUrl: ApiClient.instance.coverUrl(song.coverId),
-                title: song.title,
+    return ResponsiveBody(
+      child: ListView(
+        children: <Widget>[
+          if (_tracks.isNotEmpty) ...<Widget>[
+            _sectionHeader('歌曲'),
+            ..._tracks.map((SongEntity song) => MediaListTile(
+                  imageUrl: ApiClient.instance.coverUrl(song.coverId),
+                  title: song.title,
                 subtitle: song.artistDisplay,
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
@@ -162,7 +164,8 @@ class _SearchPageState extends State<SearchPage> {
                 ),
               )),
         ],
-      ],
+        ],
+      ),
     );
   }
 

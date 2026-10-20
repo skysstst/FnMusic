@@ -10,7 +10,9 @@ import 'package:fnmusic/app/state/player_state.dart';
 import 'package:fnmusic/app/state/player_style_settings.dart';
 import 'package:fnmusic/app/state/song_state.dart';
 import 'package:fnmusic/pages/player/player_page.dart';
+import 'package:fnmusic/pages/player/widgets/album_swipe_layer.dart';
 import 'package:fnmusic/pages/player/widgets/player_bottom_panel.dart';
+import 'package:fnmusic/pages/player/lyrics/lyric_view.dart';
 
 /// 测试引擎：记录传输调用，不触碰真实音频插件。
 class FakePlayerEngine implements PlayerEngine {
@@ -313,51 +315,42 @@ void main() {
     expect(find.byType(Slider), findsWidgets);
   });
 
-  // ---------- 封面页 ⇄ 歌词页：点击切换，横向手势归切歌 ----------
+  // ---------- 封面页 ⇄ 歌词页：淡入淡出，横向手势归切歌 ----------
 
-  testWidgets('封面页与歌词页之间彻底关闭滑动切换', (
+  testWidgets('封面页与歌词页之间是淡入淡出（无翻页转场）', (
     WidgetTester tester,
   ) async {
     _loadPlayingState();
     await _pumpPlayer(tester);
 
-    final PageView pageView = tester.widget<PageView>(find.byType(PageView));
-    expect(
-      pageView.physics,
-      isA<NeverScrollableScrollPhysics>(),
-      reason: '这两页必须靠点击切换 —— 横向手势已经改派给上一首/下一首，'
-          '留着滑动会让两个手势互相抢，用户往左滑不知道会翻页还是切歌',
-    );
-  });
-
-  testWidgets('封面页空白处单击进入歌词页', (WidgetTester tester) async {
-    _loadPlayingState();
-    await _pumpPlayer(tester);
-
     // 判别标志用歌词页操作栏的「时」徽标 —— 封面页没有它。
     expect(find.text('时'), findsNothing);
+    // 两页不是 PageView 翻页关系：没有 PageView，歌词页按需挂载。
+    expect(find.byType(PageView), findsNothing);
 
-    // 点封面区空白（避开底部进度条与按钮）。
-    await tester.tapAt(const Offset(400, 150));
+    await tester.tapAt(const Offset(150, 150));
     await tester.pumpAndSettle();
 
     expect(find.text('时'), findsOneWidget);
   });
+
   testWidgets('封面页横滑切歌后不会翻到歌词页', (WidgetTester tester) async {
     _loadPlayingState();
     await _pumpPlayer(tester);
 
-    await tester.dragFrom(const Offset(400, 150), const Offset(-200, 0));
+    await tester.dragFrom(const Offset(150, 150), const Offset(-200, 0));
     await tester.pumpAndSettle();
 
     expect(find.text('时'), findsNothing);
   });
 
-  // ---------- 横屏 / 竖屏布局（车机适配） ----------
+  // ---------- 三档窗口布局（小米车机柔性桌面适配） ----------
 
-  testWidgets('横屏下封面与控制器左右分栏', (WidgetTester tester) async {
+  testWidgets('大屏（车机全屏）三窗格：封面 | 控制 | 歌词', (
+    WidgetTester tester,
+  ) async {
     _loadPlayingState();
-    // 横屏：宽 > 高（车机全屏 / 平板横屏）。
+    // ≥840dp 大屏：车机全屏窗口。
     tester.view.physicalSize = const Size(1200, 800);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
@@ -365,23 +358,49 @@ void main() {
     await tester.pumpWidget(const MaterialApp(home: PlayerPage()));
     await tester.pumpAndSettle();
 
-    // 底部面板应出现在右半屏（左右分栏），而非屏幕底部。
+    // 三窗格从左到右：封面轮播 → 控制面板 → 歌词常显。
+    final Offset stagePos = tester.getTopLeft(find.byType(AlbumSwipeLayer));
     final Offset panelPos = tester.getTopLeft(find.byType(PlayerBottomPanel));
-    expect(panelPos.dx, greaterThan(600));
+    final Offset lyricsPos = tester.getTopLeft(find.byType(PlayerLyricsView));
+    expect(panelPos.dx, greaterThan(stagePos.dx));
+    expect(lyricsPos.dx, greaterThan(panelPos.dx));
   });
 
-  testWidgets('竖屏下封面与控制器上下排列', (WidgetTester tester) async {
+  testWidgets('中屏（车机 2/3 窗口）双窗格：封面与控制器左右分栏', (
+    WidgetTester tester,
+  ) async {
     _loadPlayingState();
-    // 竖屏：高 > 宽（手机竖屏 / 车机 1/3 窄窗口）。
-    tester.view.physicalSize = const Size(600, 1200);
+    // 600-839dp 中屏：车机 2/3 窗口。
+    tester.view.physicalSize = const Size(800, 900);
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.reset);
 
     await tester.pumpWidget(const MaterialApp(home: PlayerPage()));
     await tester.pumpAndSettle();
 
-    // 底部面板应在屏幕下半部（上下排列）。
+    // 控制面板应在封面右侧（左右分栏），而非屏幕底部。
+    final Offset stagePos = tester.getTopLeft(find.byType(AlbumSwipeLayer));
     final Offset panelPos = tester.getTopLeft(find.byType(PlayerBottomPanel));
-    expect(panelPos.dy, greaterThan(600));
+    expect(panelPos.dx, greaterThan(stagePos.dx));
+    // 中屏不常显歌词（歌词靠点击淡入）。
+    expect(find.byType(PlayerLyricsView), findsNothing);
+  });
+
+  testWidgets('小屏（手机 / 车机 1/3 窗口）封面与控制器上下排列', (
+    WidgetTester tester,
+  ) async {
+    _loadPlayingState();
+    // <600dp 小屏：手机竖屏 / 车机 1/3 窄窗口。
+    tester.view.physicalSize = const Size(412, 915);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(const MaterialApp(home: PlayerPage()));
+    await tester.pumpAndSettle();
+
+    // 控制面板应在封面下方（上下排列）。
+    final Offset stagePos = tester.getTopLeft(find.byType(AlbumSwipeLayer));
+    final Offset panelPos = tester.getTopLeft(find.byType(PlayerBottomPanel));
+    expect(panelPos.dy, greaterThan(stagePos.dy));
   });
 }

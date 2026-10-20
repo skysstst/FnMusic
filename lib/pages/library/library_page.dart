@@ -27,10 +27,14 @@ class LibraryPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('音乐库')),
-      // 横屏 / 车机大屏下列数增多，避免格子被拉宽变形。
+      // 响应式列数（小米大屏适配标准断点）：
+      // <600dp 小屏（手机 / 车机 1/3 窗口）3 列；
+      // 600-839dp 中屏（车机 2/3 窗口）4 列；
+      // ≥840dp 大屏（车机全屏）5 列 —— 避免格子被拉宽变形。
       body: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints constraints) {
-          final int columns = constraints.maxWidth >= 720 ? 5 : 3;
+          final double w = constraints.maxWidth;
+          final int columns = w >= 840 ? 5 : (w >= 600 ? 4 : 3);
           return GridView.count(
             padding: const EdgeInsets.all(16),
             crossAxisCount: columns,

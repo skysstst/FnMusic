@@ -33,24 +33,35 @@ class PlayerHeader extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   mainAxisSize: MainAxisSize.min,
                   children: <Widget>[
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.left,
-                      style: TextStyle(
-                        color: titleColor,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
+                    // 换歌（滑动切歌 / 下一首）时标题交叉淡入：
+                    // 轮播动画进行中歌曲已切换，硬跳的新标题配着
+                    // 还在滑出的旧封面很突兀，淡一下过渡自然。
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: Text(
+                        title,
+                        key: ValueKey<String>(song?.guid ?? ''),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.left,
+                        style: TextStyle(
+                          color: titleColor,
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 4),
-                    Text(
-                      artist,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.left,
-                      style: TextStyle(color: subtitleColor, fontSize: 16),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 220),
+                      child: Text(
+                        artist,
+                        key: ValueKey<String>(song?.guid ?? ''),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        textAlign: TextAlign.left,
+                        style: TextStyle(color: subtitleColor, fontSize: 16),
+                      ),
                     ),
                   ],
                 ),

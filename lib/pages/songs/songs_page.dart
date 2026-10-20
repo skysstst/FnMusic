@@ -5,6 +5,7 @@ import '../../app/services/player_service.dart';
 import '../../app/state/song_state.dart';
 import '../../app/utils/natural_sort.dart';
 import '../../components/list/media_list_tile.dart';
+import '../../components/common/responsive_body.dart';
 import '../../components/playlist/track_actions_menu.dart';
 import '../player/player_route.dart';
 
@@ -116,33 +117,38 @@ class _SongsPageState extends State<SongsPage> {
       ),
       body: _songs.isEmpty && _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              controller: _scrollController,
-              itemCount: _sorted.length + 1,
-              itemBuilder: (context, index) {
-                if (index >= _sorted.length) {
-                  return _buildFooter(scheme);
-                }
-                final SongEntity song = _sorted[index];
-                return MediaListTile(
-                  imageUrl: ApiClient.instance
-                      .coverUrl(song.coverId ?? song.albumGuid),
-                  title: song.title,
-                  subtitle: song.artistDisplay,
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      Text(
-                        song.durationDisplay,
-                        style: TextStyle(
-                            color: scheme.onSurfaceVariant, fontSize: 13),
-                      ),
-                      TrackActionsMenu(track: song),
-                    ],
-                  ),
-                  onTap: () => _playAt(index),
-                );
-              },
+          // 宽屏（车机 2/3 / 全屏窗口）限宽居中：歌曲列表有明确排序，
+          // 不适合多列，按小米大屏适配标准的「缩进」策略控制行宽，
+          // 避免条目被横向拉满、两侧内容难以对应。
+          : ResponsiveBody(
+              child: ListView.builder(
+                controller: _scrollController,
+                itemCount: _sorted.length + 1,
+                itemBuilder: (context, index) {
+                  if (index >= _sorted.length) {
+                    return _buildFooter(scheme);
+                  }
+                  final SongEntity song = _sorted[index];
+                  return MediaListTile(
+                    imageUrl: ApiClient.instance
+                        .coverUrl(song.coverId ?? song.albumGuid),
+                    title: song.title,
+                    subtitle: song.artistDisplay,
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        Text(
+                          song.durationDisplay,
+                          style: TextStyle(
+                              color: scheme.onSurfaceVariant, fontSize: 13),
+                        ),
+                        TrackActionsMenu(track: song),
+                      ],
+                    ),
+                    onTap: () => _playAt(index),
+                  );
+                },
+              ),
             ),
     );
   }

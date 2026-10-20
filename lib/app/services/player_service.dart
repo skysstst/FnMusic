@@ -285,6 +285,28 @@ class FnPlayerService {
   /// 手势看起来完全失灵。所以这里走一条不受位置影响的通道。
   Future<void> previousTrack() => _advance(forward: false);
 
+  /// 预读下一首（切歌封面轮播动画用，**不改变任何播放状态**）。
+  ///
+  /// 返回 [next] 按当前播放模式将要播放的歌曲；null = 无法继续
+  /// （顺序模式到队尾 / 空队列 / 漫游模式）。轮播动画据此决定
+  /// 「滑出去还是弹回来」：null 时手势应回弹，因为 [next] 不会切歌。
+  ///
+  /// 漫游模式（`_roaming`）走服务端续播链，本地队列预读无意义，返回 null。
+  SongEntity? peekNext() {
+    if (_roaming) return null;
+    final int? index = _q.nextIndex();
+    return index == null ? null : _q.items[index];
+  }
+
+  /// 预读上一首（切歌封面轮播动画用，**不改变任何播放状态**）。
+  ///
+  /// 与 [peekNext] 对称；null 时手势回弹（[previousTrack] 不会切歌）。
+  SongEntity? peekPrevious() {
+    if (_roaming) return null;
+    final int? index = _q.previousIndex();
+    return index == null ? null : _q.items[index];
+  }
+
   /// 跳到队列 [index]。
   Future<void> skipTo(int index) async {
     if (index < 0 || index >= _q.items.length) return;

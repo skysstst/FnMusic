@@ -7,6 +7,7 @@ import '../../app/services/player_service.dart';
 import '../../app/services/stats_service.dart';
 import '../../app/state/song_state.dart';
 import '../../components/list/media_list_tile.dart';
+import '../player/player_route.dart';
 
 /// 听歌统计：总览 + 按月视图 + 热门歌曲 + 最近播放。
 class ListeningStatsPage extends StatefulWidget {
@@ -80,6 +81,8 @@ class _ListeningStatsPageState extends State<ListeningStatsPage> {
       final FnTrack track =
           await FnTrackService.instance.fetchTrackDetail(stat.songId);
       await FnPlayerService.instance.playSong(SongEntity.fromTrack(track));
+      if (!mounted) return;
+      openPlayerPage(context);
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
